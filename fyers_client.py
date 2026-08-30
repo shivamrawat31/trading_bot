@@ -82,11 +82,11 @@ class FyersClient:
                 "create_cookie": True
             }
             headers = {"Authorization": f"Bearer {token}"}
-            res4 = requests.post("https://api-t1.fyers.in/api/v3/generate-authcode", json=payload4, headers=headers).json()
+            res4 = requests.post("https://api-t1.fyers.in/api/v3/token", json=payload4, headers=headers).json()
             if res4.get("s") != "ok":
                 raise Exception(f"Failed to generate authcode: {res4}")
             
-            auth_url = res4["data"]["auth_code"]
+            auth_url = res4["Url"]
             
             # Parse Auth Code
             parsed_url = urllib.parse.urlparse(auth_url)
