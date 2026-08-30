@@ -83,19 +83,7 @@ class FyersClient:
             
         except Exception as e:
             logger.error(f"Fyers authentication failed via Selenium: {e}")
-            logger.info("Falling back to manual authentication...")
-            print(f"Please open this URL in your browser and authorize:\n{auth_url}")
-            auth_code = input("Enter the 'auth_code' from the redirect URL here: ").strip()
-            
-            try:
-                session.set_token(auth_code)
-                response = session.generate_token()
-                self.access_token = response["access_token"]
-                self.fyers = fyersModel.FyersModel(client_id=CLIENT_ID, is_async=False, token=self.access_token, log_path="")
-                logger.info("Successfully authenticated manually with Fyers!")
-            except Exception as manual_e:
-                logger.error(f"Manual authentication also failed: {manual_e}")
-                raise
+            raise
         finally:
             driver.quit()
 
