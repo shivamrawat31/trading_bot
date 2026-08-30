@@ -65,11 +65,15 @@ class FyersClient:
             token = res3["data"]["access_token"]
             
             # 4. Generate Auth Code
+            client_parts = CLIENT_ID.strip().split('-')
+            app_prefix = client_parts[0]
+            app_type = client_parts[1] if len(client_parts) > 1 else "100"
+            
             payload4 = {
                 "fyers_id": FYERS_USER_ID,
-                "app_id": CLIENT_ID[:-4],
+                "app_id": app_prefix,
                 "redirect_uri": REDIRECT_URI,
-                "appType": "100",
+                "appType": app_type,
                 "code_challenge": "",
                 "state": "None",
                 "scope": "",
@@ -78,7 +82,7 @@ class FyersClient:
                 "create_cookie": True
             }
             headers = {"Authorization": f"Bearer {token}"}
-            res4 = requests.post("https://api-t1.fyers.in/api/v3/token", json=payload4, headers=headers).json()
+            res4 = requests.post("https://api-t1.fyers.in/api/v3/generate-authcode", json=payload4, headers=headers).json()
             if res4.get("s") != "ok":
                 raise Exception(f"Failed to generate authcode: {res4}")
             
