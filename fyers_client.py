@@ -38,7 +38,7 @@ class FyersClient:
                 "app_id": "2"
             }
             res1 = requests.post("https://api-t2.fyers.in/vagator/v2/send_login_otp_v2", json=payload1).json()
-            if res1.get("code") != 200:
+            if res1.get("s") != "ok":
                 raise Exception(f"Failed to send OTP: {res1}")
             request_key = res1["request_key"]
             
@@ -49,7 +49,7 @@ class FyersClient:
                 "otp": totp
             }
             res2 = requests.post("https://api-t2.fyers.in/vagator/v2/verify_otp", json=payload2).json()
-            if res2.get("code") != 200:
+            if res2.get("s") != "ok":
                 raise Exception(f"Failed to verify TOTP: {res2}")
             request_key = res2["request_key"]
             
@@ -60,7 +60,7 @@ class FyersClient:
                 "identifier": get_base64(FYERS_PIN)
             }
             res3 = requests.post("https://api-t2.fyers.in/vagator/v2/verify_pin_v2", json=payload3).json()
-            if res3.get("code") != 200:
+            if res3.get("s") != "ok":
                 raise Exception(f"Failed to verify PIN: {res3}")
             token = res3["data"]["access_token"]
             
@@ -79,7 +79,7 @@ class FyersClient:
             }
             headers = {"Authorization": f"Bearer {token}"}
             res4 = requests.post("https://api.fyers.in/api/v2/generate-authcode", json=payload4, headers=headers).json()
-            if res4.get("s") != "ok" and res4.get("code") != 200:
+            if res4.get("s") != "ok":
                 raise Exception(f"Failed to generate authcode: {res4}")
             
             auth_url = res4["data"]["auth_code"]
