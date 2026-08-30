@@ -2,13 +2,8 @@ import time
 import logging
 import urllib.parse
 from fyers_apiv3 import fyersModel
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+import requests
+import base64
 import pyotp
 import pandas as pd
 
@@ -16,14 +11,17 @@ from config import CLIENT_ID, SECRET_KEY, REDIRECT_URI, FYERS_USER_ID, FYERS_PIN
 
 logger = logging.getLogger(__name__)
 
+def get_base64(text):
+    return base64.b64encode(text.encode('ascii')).decode('ascii')
+
 class FyersClient:
     def __init__(self):
         self.access_token = None
         self.fyers = None
 
     def authenticate(self):
-        """Authenticates using Selenium headless browser and PyOTP."""
-        logger.info("Starting Fyers Authentication via Selenium...")
+        """Authenticates using headless requests and PyOTP to bypass UI."""
+        logger.info("Starting Fyers Authentication via backend APIs...")
         
         session = fyersModel.SessionModel(
             client_id=CLIENT_ID,
@@ -33,45 +31,61 @@ class FyersClient:
             grant_type="authorization_code"
         )
         
-        auth_url = session.generate_authcode()
-        
-        # Setup Selenium Headless
-        chrome_options = Options()
-        chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-        
         try:
-            driver.get(auth_url)
-            wait = WebDriverWait(driver, 30)
+            # 1. Send Login OTP
+            payload1 = {
+                "fy_id": get_base64(FYERS_USER_ID),
+                "app_id": "2"
+            }
+            res1 = requests.post("https://api-t2.fyers.in/vagator/v2/send_login_otp_v2", json=payload1).json()
+            if res1.get("code") != 200:
+                raise Exception(f"Failed to send OTP: {res1}")
+            request_key = res1["request_key"]
             
-            # 1. Login with Client ID
-            login_id_input = wait.until(EC.presence_of_element_located((By.ID, "login_id")))
-            login_id_input.send_keys(FYERS_USER_ID)
-            driver.find_element(By.ID, "nextbtn").click()
-            
-            # 2. Enter TOTP
-            totp_input = wait.until(EC.presence_of_element_located((By.ID, "totp")))
+            # 2. Verify TOTP
             totp = pyotp.TOTP(FYERS_TOTP_SECRET).now()
-            totp_input.send_keys(totp)
-            driver.find_element(By.ID, "submit-totp").click()
+            payload2 = {
+                "request_key": request_key,
+                "otp": totp
+            }
+            res2 = requests.post("https://api-t2.fyers.in/vagator/v2/verify_otp", json=payload2).json()
+            if res2.get("code") != 200:
+                raise Exception(f"Failed to verify TOTP: {res2}")
+            request_key = res2["request_key"]
             
-            # 3. Enter PIN
-            pin_input = wait.until(EC.presence_of_element_located((By.ID, "pin")))
-            pin_input.send_keys(FYERS_PIN)
-            driver.find_element(By.ID, "submit-pin").click()
+            # 3. Verify PIN
+            payload3 = {
+                "request_key": request_key,
+                "identity_type": "pin",
+                "identifier": get_base64(FYERS_PIN)
+            }
+            res3 = requests.post("https://api-t2.fyers.in/vagator/v2/verify_pin_v2", json=payload3).json()
+            if res3.get("code") != 200:
+                raise Exception(f"Failed to verify PIN: {res3}")
+            token = res3["data"]["access_token"]
             
-            # Wait for redirect
-            wait.until(EC.url_contains("auth_code="))
-            current_url = driver.current_url
+            # 4. Generate Auth Code
+            payload4 = {
+                "fyers_id": FYERS_USER_ID,
+                "app_id": CLIENT_ID[:-4],
+                "redirect_uri": REDIRECT_URI,
+                "appType": "100",
+                "code_challenge": "",
+                "state": "None",
+                "scope": "",
+                "nonce": "",
+                "response_type": "code",
+                "create_cookie": True
+            }
+            headers = {"Authorization": f"Bearer {token}"}
+            res4 = requests.post("https://api.fyers.in/api/v2/generate-authcode", json=payload4, headers=headers).json()
+            if res4.get("s") != "ok" and res4.get("code") != 200:
+                raise Exception(f"Failed to generate authcode: {res4}")
+            
+            auth_url = res4["data"]["auth_code"]
             
             # Parse Auth Code
-            parsed_url = urllib.parse.urlparse(current_url)
+            parsed_url = urllib.parse.urlparse(auth_url)
             auth_code = urllib.parse.parse_qs(parsed_url.query)['auth_code'][0]
             
             # Generate Access Token
@@ -83,11 +97,8 @@ class FyersClient:
             logger.info("Successfully authenticated with Fyers!")
             
         except Exception as e:
-            logger.error(f"Fyers authentication failed via Selenium: {e}")
-            driver.save_screenshot('selenium_error.png')
+            logger.error(f"Fyers API authentication failed: {e}")
             raise
-        finally:
-            driver.quit()
 
     def get_historical_data(self, symbol, resolution="5", days_back=5):
         """Fetches historical data and returns a DataFrame."""
