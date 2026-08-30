@@ -1,0 +1,7 @@
+fyers-apiv3
+redis
+pyotp
+selenium
+webdriver-manager
+pandas
+numpy
