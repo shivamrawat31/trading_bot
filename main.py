@@ -197,6 +197,7 @@ class TradingBot:
             if self.state_manager.is_symbol_locked(symbol):
                 continue
                 
+            time.sleep(1)
             df = self.fyers.get_historical_data(symbol)
             if df is None:
                 continue
