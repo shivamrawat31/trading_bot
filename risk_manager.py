@@ -29,14 +29,14 @@ class RiskManager:
         # 1. Calculate Prices (Assuming Long for now as per strategy "Long signals only")
         # Entry with 0.1% buffer
         raw_limit_price = price * (1 + BUFFER_PERCENT)
-        limit_entry = round(round(raw_limit_price / 0.05) * 0.05, 2)
+        limit_entry = round(raw_limit_price, 1)
         
         # Absolute SL and TP distances
         raw_sl_distance = atr * SL_ATR_MULTIPLIER
         raw_tp_distance = atr * TP_ATR_MULTIPLIER
         
-        abs_sl = round(round(raw_sl_distance / 0.05) * 0.05, 2)
-        abs_tp = round(round(raw_tp_distance / 0.05) * 0.05, 2)
+        abs_sl = round(raw_sl_distance, 1)
+        abs_tp = round(raw_tp_distance, 1)
         
         # Risk per share is exactly the SL distance
         risk_per_share = abs_sl
