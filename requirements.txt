@@ -1,7 +1,8 @@
 fyers-apiv3
 redis
 pyotp
-selenium
-webdriver-manager
+requests
 pandas
 numpy
+python-dotenv
+tzdata
