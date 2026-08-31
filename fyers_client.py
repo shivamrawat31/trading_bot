@@ -141,14 +141,15 @@ class FyersClient:
             "qty": qty,
             "type": 1, # 1 => Limit Order
             "side": 1, # 1 => Buy
-            "productType": "BO", # Bracket Order
+            "productType": "INTRADAY", # Intraday order with SL/TP
             "limitPrice": limit_price,
             "stopPrice": 0,
             "validity": "DAY",
             "disclosedQty": 0,
             "offlineOrder": False,
             "stopLoss": stop_loss_abs,      # Absolute difference
-            "takeProfit": take_profit_abs   # Absolute difference
+            "takeProfit": take_profit_abs,  # Absolute difference
+            "legType": 1                    # 1 => Absolute points
         }
         
         try:
