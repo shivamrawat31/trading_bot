@@ -1,7 +1,7 @@
 import math
 import logging
 from config import MAX_RISK_PER_TRADE, LEVERAGE, BUFFER_PERCENT, DAILY_MAX_DRAWDOWN, SL_ATR_MULTIPLIER, TP_ATR_MULTIPLIER
-# We do not use utils.round_to_tick anymore directly here
+import alerts
 
 logger = logging.getLogger(__name__)
 
@@ -14,11 +14,18 @@ class RiskManager:
         daily_pnl = self.state_manager.get_daily_pnl()
         if daily_pnl <= DAILY_MAX_DRAWDOWN:
             logger.warning(f"KILL SWITCH ENGAGED! Daily PnL: {daily_pnl} <= {DAILY_MAX_DRAWDOWN}")
+            if not self.state_manager.has_alerted_kill_switch():
+                alerts.send_alert(f"KILL SWITCH ENGAGED! Daily PnL: {daily_pnl} <= {DAILY_MAX_DRAWDOWN}", "critical")
+                self.state_manager.mark_kill_switch_alerted()
             return True
         return False
 
-    def calculate_trade_parameters(self, price, atr, capital_slot, is_long=True):
+    def calculate_trade_parameters(self, price, atr, capital_slot):
         """
+        LONG-ONLY: this function assumes a long position. If short-side trading is ever added
+        to strategy.py, this function needs new SL-above-entry / TP-below-entry math — do not
+        just flip a flag without rewriting the price logic.
+        
         Calculates Limit Entry, absolute SL distance, absolute TP distance, and downsizes shares.
         Ensures strict max ₹50 risk.
         Returns a dictionary or None if rejected.
@@ -26,7 +33,7 @@ class RiskManager:
         if self.check_kill_switch():
             return None
 
-        # 1. Calculate Prices (Assuming Long for now as per strategy "Long signals only")
+        # 1. Calculate Prices
         # Entry with 0.1% buffer
         raw_limit_price = price * (1 + BUFFER_PERCENT)
         limit_entry = round(raw_limit_price, 1)
