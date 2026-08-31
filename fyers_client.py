@@ -1,5 +1,6 @@
 import time
 import logging
+from datetime import datetime, timedelta
 import urllib.parse
 from fyers_apiv3 import fyersModel
 import requests
@@ -106,17 +107,15 @@ class FyersClient:
             alerts.send_alert(f"Fyers API authentication failed: {e}", "critical")
             raise
 
-    def get_historical_data(self, symbol, resolution="5", days_back=5):
+    def get_history(self, symbol: str, resolution: str = "5", days: int = 5) -> pd.DataFrame:
         """Fetches historical data and returns a DataFrame."""
         if not self.fyers:
             raise Exception("Not authenticated.")
             
         # Time calculations (epoch)
-        import time
-        from datetime import datetime, timedelta
         
         end_time = int(time.time())
-        start_time = int((datetime.now() - timedelta(days=days_back)).timestamp())
+        start_time = int((datetime.now() - timedelta(days=days)).timestamp())
         
         data = {
             "symbol": symbol,
@@ -140,13 +139,13 @@ class FyersClient:
             logger.error(f"Exception fetching historical data for {symbol}: {e}")
             return None
 
-    def place_bracket_order(self, symbol, qty, limit_price, stop_loss_abs, take_profit_abs):
+    def place_bracket_order(self, symbol, qty, limit_price, stop_loss_abs, take_profit_abs, side):
         """Places a bracket limit order. Wraps in try/except for BO blocks/margin limits."""
         data = {
             "symbol": symbol,
             "qty": qty,
             "type": 1, # 1 => Limit Order
-            "side": 1, # 1 => Buy
+            "side": side, # 1 => Buy, -1 => Sell
             "productType": "INTRADAY", # Intraday order with SL/TP
             "limitPrice": limit_price,
             "stopPrice": 0,
