@@ -27,7 +27,7 @@ WATCHLIST = [
     "NSE:SBIN-EQ",
     "NSE:BHARTIARTL-EQ",
     "NSE:ITC-EQ",
-    "NSE:LARSEN-EQ",
+    "NSE:LT-EQ",
     "NSE:KOTAKBANK-EQ"
 ]
 
