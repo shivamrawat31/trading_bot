@@ -1,6 +1,8 @@
 import redis
 import json
 import logging
+import datetime
+from zoneinfo import ZoneInfo
 from config import REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, INITIAL_SLOTS
 
 logger = logging.getLogger(__name__)
@@ -12,7 +14,9 @@ class StateManager:
                 host=REDIS_HOST,
                 port=REDIS_PORT,
                 password=REDIS_PASSWORD,
-                decode_responses=True
+                decode_responses=True,
+                socket_connect_timeout=5,
+                socket_timeout=5
             )
             self.redis_client.ping()
             logger.info("Connected to Redis successfully.")
@@ -20,12 +24,25 @@ class StateManager:
             logger.error(f"Failed to connect to Redis: {e}")
             raise
 
+    def should_reset_for_new_day(self):
+        """Checks if the state needs to be reset for a new trading day."""
+        last_reset = self.redis_client.get("last_reset_date")
+        today = datetime.datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
+        return last_reset != today
+
+    def mark_reset_done(self):
+        """Marks the reset as completed for today."""
+        today = datetime.datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
+        self.redis_client.set("last_reset_date", today)
+
     def initialize_daily_state(self):
         """Initializes or resets the daily state."""
         self.redis_client.set("available_slots", json.dumps(INITIAL_SLOTS))
         self.redis_client.set("daily_pnl", 0.0)
         self.redis_client.set("pending_orders", json.dumps([]))
         self.redis_client.set("open_positions", json.dumps([]))
+        self.redis_client.set("kill_switch_alerted", "false")
+        self.mark_reset_done()
         logger.info("Daily state initialized/reset: available slots, daily pnl, pending orders, and open positions reset.")
 
     def get_available_slots(self):
@@ -106,3 +123,10 @@ class StateManager:
         positions = [p for p in positions if p.get("symbol") != symbol]
         self.redis_client.set("open_positions", json.dumps(positions))
 
+    def has_alerted_kill_switch(self):
+        """Checks if the kill switch alert has already been sent today."""
+        return self.redis_client.get("kill_switch_alerted") == "true"
+
+    def mark_kill_switch_alerted(self):
+        """Marks that the kill switch alert has been sent."""
+        self.redis_client.set("kill_switch_alerted", "true")
