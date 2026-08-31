@@ -6,6 +6,7 @@ import requests
 import base64
 import pyotp
 import pandas as pd
+import alerts
 
 from config import CLIENT_ID, SECRET_KEY, REDIRECT_URI, FYERS_USER_ID, FYERS_PIN, FYERS_TOTP_SECRET
 
@@ -102,6 +103,7 @@ class FyersClient:
             
         except Exception as e:
             logger.error(f"Fyers API authentication failed: {e}")
+            alerts.send_alert(f"Fyers API authentication failed: {e}", "critical")
             raise
 
     def get_historical_data(self, symbol, resolution="5", days_back=5):
@@ -125,13 +127,17 @@ class FyersClient:
             "cont_flag": "1"
         }
         
-        response = self.fyers.history(data=data)
-        if response.get("s") == "ok":
-            df = pd.DataFrame(response["candles"], columns=["datetime", "open", "high", "low", "close", "volume"])
-            df['datetime'] = pd.to_datetime(df['datetime'], unit='s', utc=True).dt.tz_convert('Asia/Kolkata')
-            return df
-        else:
-            logger.error(f"Failed to fetch historical data for {symbol}: {response}")
+        try:
+            response = self.fyers.history(data=data)
+            if response.get("s") == "ok":
+                df = pd.DataFrame(response["candles"], columns=["datetime", "open", "high", "low", "close", "volume"])
+                df['datetime'] = pd.to_datetime(df['datetime'], unit='s', utc=True).dt.tz_convert('Asia/Kolkata')
+                return df
+            else:
+                logger.error(f"Failed to fetch historical data for {symbol}: {response}")
+                return None
+        except Exception as e:
+            logger.error(f"Exception fetching historical data for {symbol}: {e}")
             return None
 
     def place_bracket_order(self, symbol, qty, limit_price, stop_loss_abs, take_profit_abs):
