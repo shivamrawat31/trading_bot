@@ -3,7 +3,7 @@ import logging
 import datetime
 import json
 from zoneinfo import ZoneInfo
-from config import WATCHLIST, MORNING_START, MARKET_CLOSE, STALE_ORDER_MINUTES, ZOMBIE_TRADE_MINUTES, NSE_HOLIDAYS, INITIAL_SLOTS, LEVERAGE
+from config import WATCHLIST, MORNING_START, MARKET_CLOSE, STALE_ORDER_MINUTES, ZOMBIE_TRADE_MINUTES, NSE_HOLIDAYS, INITIAL_SLOTS, LEVERAGE, HTF_TIMEFRAME, LTF_TIMEFRAME
 from fyers_client import FyersClient
 from strategy import Strategy
 from risk_manager import RiskManager
@@ -19,7 +19,7 @@ KOLKATA_TZ = ZoneInfo("Asia/Kolkata")
 class TradingBot:
     def __init__(self):
         self.state_manager = StateManager()
-        self.fyers = FyersClient()
+        self.broker = FyersClient()
         self.strategy = Strategy()
         self.risk_manager = RiskManager(self.state_manager)
 
@@ -27,7 +27,7 @@ class TradingBot:
         """Attempts to authenticate with Fyers, with retries on failure."""
         for attempt in range(1, max_retries + 1):
             try:
-                self.fyers.authenticate()
+                self.broker.authenticate()
                 return
             except Exception as e:
                 logger.error(f"Authentication attempt {attempt} failed: {e}")
@@ -35,42 +35,51 @@ class TradingBot:
                     time.sleep(retry_delay * attempt)
                 else:
                     alerts.send_alert(f"Critical: All {max_retries} auth attempts failed. Bot halting.", "critical")
-                    raise
+                    import sys
+                    sys.exit(1)
+
+    def _apply_dynamic_slot_allocation(self):
+        """Fetches live broker funds and resizes slots dynamically if balance > 2000."""
+        try:
+            funds_response = self.broker.fyers.funds()
+            if funds_response and funds_response.get("s") == "ok":
+                fund_limit = funds_response.get("fund_limit", [])
+                available_balance = 0
+                for item in fund_limit:
+                    if item.get("title") == "Available Balance":
+                        available_balance = item.get("equityAmount", 0)
+                        break
+                        
+                if available_balance > 2000:
+                    dynamic_slots = [
+                        int(available_balance * 0.40),
+                        int(available_balance * 0.40),
+                        int(available_balance * 0.20)
+                    ]
+                    import json
+                    self.state_manager.redis_client.set("available_slots", json.dumps(dynamic_slots))
+                    self.state_manager.redis_client.set("daily_initial_slots", json.dumps(dynamic_slots))
+                    logger.info(f"Dynamically allocated slots based on balance {available_balance}: {dynamic_slots}")
+        except Exception as e:
+            logger.error(f"Failed to dynamically allocate slots: {e}")
 
     def run(self):
         logger.info("Initializing Trading Engine...")
         self._safe_authenticate()
         alerts.send_alert("Trading bot started successfully", "info")
         
-        if self.state_manager.should_reset_for_new_day():
-            logger.info("New trading day detected — state reset.")
-            self.state_manager.initialize_daily_state()
-            
-            try:
-                funds_response = self.fyers.fyers.funds()
-                if funds_response and funds_response.get("s") == "ok":
-                    fund_limit = funds_response.get("fund_limit", [])
-                    available_balance = 0
-                    for item in fund_limit:
-                        if item.get("title") == "Available Balance":
-                            available_balance = item.get("equityAmount", 0)
-                            break
-                            
-                    if available_balance > 2000:
-                        dynamic_slots = [
-                            int(available_balance * 0.40),
-                            int(available_balance * 0.40),
-                            int(available_balance * 0.20)
-                        ]
-                        import json
-                        self.state_manager.redis_client.set("available_slots", json.dumps(dynamic_slots))
-                        self.state_manager.redis_client.set("daily_initial_slots", json.dumps(dynamic_slots))
-                        logger.info(f"Dynamically allocated slots based on balance {available_balance}: {dynamic_slots}")
-            except Exception as e:
-                logger.error(f"Failed to dynamically allocate slots: {e}")
-        else:
-            logger.info("Existing trading day state found — reconciling with broker instead of resetting.")
-            self.reconcile_state_with_broker()
+        try:
+            if self.state_manager.should_reset_for_new_day():
+                logger.info("New trading day detected — state reset.")
+                self.state_manager.initialize_daily_state()
+                self._apply_dynamic_slot_allocation()
+            else:
+                logger.info("Existing trading day state found — reconciling with broker instead of resetting.")
+                self.reconcile_state_with_broker()
+        except Exception as e:
+            logger.critical(f"Startup state reset/reconciliation FAILED: {e}")
+            alerts.send_alert(f"Startup state reset/reconciliation FAILED: {e}. Bot cannot safely determine capital/position state and is halting rather than risking trading with unknown state.", "critical")
+            raise
         
         while True:
             try:
@@ -114,9 +123,18 @@ class TradingBot:
                     time.sleep(sleep_secs)
                 
                 # Wake up and reset state
-                if self.state_manager.should_reset_for_new_day():
-                    self.state_manager.initialize_daily_state()
+                reset_occurred = self.state_manager.should_reset_for_new_day()
+                if reset_occurred:
+                    try:
+                        self.state_manager.initialize_daily_state()
+                    except Exception as e:
+                        logger.critical(f"Startup state reset/reconciliation FAILED: {e}")
+                        alerts.send_alert(f"Startup state reset/reconciliation FAILED: {e}. Bot cannot safely determine capital/position state and is halting rather than risking trading with unknown state.", "critical")
+                        import sys
+                        sys.exit(1)
                 self._safe_authenticate()
+                if reset_occurred:
+                    self._apply_dynamic_slot_allocation()
                 continue
                 
             # 0.5 Holiday Sleep Trap
@@ -131,9 +149,18 @@ class TradingBot:
                     time.sleep(sleep_secs)
                 
                 # Wake up and reset state
-                if self.state_manager.should_reset_for_new_day():
-                    self.state_manager.initialize_daily_state()
+                reset_occurred = self.state_manager.should_reset_for_new_day()
+                if reset_occurred:
+                    try:
+                        self.state_manager.initialize_daily_state()
+                    except Exception as e:
+                        logger.critical(f"Startup state reset/reconciliation FAILED: {e}")
+                        alerts.send_alert(f"Startup state reset/reconciliation FAILED: {e}. Bot cannot safely determine capital/position state and is halting rather than risking trading with unknown state.", "critical")
+                        import sys
+                        sys.exit(1)
                 self._safe_authenticate()
+                if reset_occurred:
+                    self._apply_dynamic_slot_allocation()
                 continue
 
             current_time_str = now.strftime("%H:%M")
@@ -150,9 +177,18 @@ class TradingBot:
                 time.sleep(sleep_secs)
                 
                 # Wake up and reset state
-                if self.state_manager.should_reset_for_new_day():
-                    self.state_manager.initialize_daily_state()
+                reset_occurred = self.state_manager.should_reset_for_new_day()
+                if reset_occurred:
+                    try:
+                        self.state_manager.initialize_daily_state()
+                    except Exception as e:
+                        logger.critical(f"Startup state reset/reconciliation FAILED: {e}")
+                        alerts.send_alert(f"Startup state reset/reconciliation FAILED: {e}. Bot cannot safely determine capital/position state and is halting rather than risking trading with unknown state.", "critical")
+                        import sys
+                        sys.exit(1)
                 self._safe_authenticate() # Re-auth for the new day
+                if reset_occurred:
+                    self._apply_dynamic_slot_allocation()
                 continue
                 
             # 2. Morning Blindfold
@@ -173,8 +209,8 @@ class TradingBot:
         logger.info("Starting mid-day reconciliation...")
         
         # 1. Fetch live data
-        live_positions_resp = self.fyers.get_positions()
-        orderbook_resp = self.fyers.get_order_book()
+        live_positions_resp = self.broker.get_positions()
+        orderbook_resp = self.broker.get_order_book()
         
         live_positions = {}
         if live_positions_resp and live_positions_resp.get("s") == "ok":
@@ -209,7 +245,7 @@ class TradingBot:
         for symbol, live_pos in live_positions.items():
             if symbol not in local_pos_symbols:
                 qty = abs(live_pos.get("netQty", 0))
-                entry_price = live_pos.get("buyAvg", live_pos.get("sellAvg", 0))
+                entry_price = live_pos.get("buyAvg") or live_pos.get("sellAvg") or 0
                 logger.critical(f"ORPHANED POSITION DETECTED: {symbol}, qty={qty} — not tracked in local state after restart")
                 
                 estimated = estimate_slot(qty, entry_price)
@@ -287,7 +323,7 @@ class TradingBot:
         
         # 1. Stale Order Exterminator & Order Sync
         pending_orders = self.state_manager.get_pending_orders()
-        orderbook_response = self.fyers.get_order_book()
+        orderbook_response = self.broker.get_order_book()
         
         if orderbook_response and orderbook_response.get("s") == "ok":
             live_orders = {o.get("id"): o for o in orderbook_response.get("orderBook", []) if o.get("id")}
@@ -302,10 +338,12 @@ class TradingBot:
                         order_time = datetime.datetime.fromisoformat(p_order["timestamp"])
                         if (datetime.datetime.now(KOLKATA_TZ) - order_time).total_seconds() > STALE_ORDER_MINUTES * 60:
                             logger.info(f"Stale Order Exterminator: Canceling {order_id}")
-                            if self.fyers.cancel_order(order_id):
+                            if self.broker.cancel_order(order_id):
                                 self.state_manager.free_slot(p_order["slot_used"])
                                 self.state_manager.remove_pending_order(order_id)
-                    elif status in [2, 3, 4]: # Traded, Cancelled, Rejected
+                    elif status in [2, 3, 4, 5]: # Traded, Cancelled, Modified, Rejected
+                        if status == 5:
+                            logger.warning(f"Order {order_id} was rejected by the broker! Freeing slot.")
                         if status == 2: # Traded -> Move to open positions
                             self.state_manager.save_open_position({
                                 "symbol": p_order["symbol"],
@@ -319,7 +357,7 @@ class TradingBot:
 
         # 2. Zombie Trade Exterminator & Position Sync (SL/TP Hit)
         open_positions = self.state_manager.get_open_positions()
-        live_positions_resp = self.fyers.get_positions()
+        live_positions_resp = self.broker.get_positions()
         
         if live_positions_resp and live_positions_resp.get("s") == "ok":
             # Map all positions, even closed ones, to find realized_profit for SL/TP hits
@@ -335,12 +373,8 @@ class TradingBot:
                     if (datetime.datetime.now(KOLKATA_TZ) - pos_time).total_seconds() > ZOMBIE_TRADE_MINUTES * 60:
                         logger.info(f"Zombie Trade Exterminator: Exiting {symbol} (open > 90 mins)")
                         alerts.send_alert(f"Zombie Trade Exterminator: Force-exiting {symbol} (open > 90 mins)", "warning")
-                        if self.fyers.exit_position(live_pos.get("id")):
-                            self.state_manager.free_slot(o_pos["slot_used"])
-                            self.state_manager.remove_open_position(symbol)
-                            self.state_manager.lock_symbol(symbol)
-                            realized = live_pos.get("realized_profit", 0)
-                            self.state_manager.update_daily_pnl(realized)
+                        if self.broker.exit_position(live_pos.get("id")):
+                            logger.info(f"Exit order sent for {symbol}. PnL and state will sync on the next engine tick.")
                 else:
                     # Position is closed (SL or TP hit)
                     logger.info(f"Position for {symbol} closed automatically (SL/TP). Syncing state...")
@@ -378,15 +412,19 @@ class TradingBot:
                 continue
                 
             time.sleep(1)
-            df = self.fyers.get_historical_data(symbol)
-            if df is None:
+            df_htf = self.broker.get_history(symbol, resolution=HTF_TIMEFRAME)
+            time.sleep(0.3)
+            df_ltf = self.broker.get_history(symbol, resolution=LTF_TIMEFRAME)
+            
+            if df_htf is None or df_ltf is None:
                 skipped_symbols.append(symbol)
                 continue
                 
             try:
-                result = self.strategy.evaluate(df)
+                htf_trend = self.strategy.determine_htf_trend(df_htf)
+                result = self.strategy.calculate_signal(df_ltf, htf_trend)
                 evaluated_count += 1
-                if result and result["score"] >= 2:
+                if result and result["signal"] in ["BUY", "SELL"] and result["score"] >= 2:
                     result["symbol"] = symbol
                     triggered_stocks.append(result)
             except Exception as e:
@@ -402,8 +440,8 @@ class TradingBot:
         if not triggered_stocks:
             return
             
-        # The Tie-Breaker Logic: Sort by Score (DESC) then Relative Volume (DESC)
-        triggered_stocks.sort(key=lambda x: (x["score"], x["rel_vol"]), reverse=True)
+        # The Tie-Breaker Logic: Sort by Relative Volume (DESC)
+        triggered_stocks.sort(key=lambda x: x["rvol"], reverse=True)
         logger.info(f"Signal Sort completed. Top candidate: {triggered_stocks[0]['symbol']}")
         
         # Sort slots descending (largest first)
@@ -429,16 +467,18 @@ class TradingBot:
             trade_params = self.risk_manager.calculate_trade_parameters(
                 price=stock["price"],
                 atr=stock["atr"],
-                capital_slot=slot_to_use
+                capital_slot=slot_to_use,
+                signal=stock["signal"]
             )
             
             if trade_params:
-                order_id = self.fyers.place_bracket_order(
+                order_id = self.broker.place_bracket_order(
                     symbol=stock["symbol"],
                     qty=trade_params["qty"],
                     limit_price=trade_params["limit_entry"],
                     stop_loss_abs=trade_params["stop_loss_abs"],
-                    take_profit_abs=trade_params["take_profit_abs"]
+                    take_profit_abs=trade_params["take_profit_abs"],
+                    side=trade_params["side"]
                 )
                 
                 if order_id:
