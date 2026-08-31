@@ -20,12 +20,8 @@ class RiskManager:
             return True
         return False
 
-    def calculate_trade_parameters(self, price, atr, capital_slot):
+    def calculate_trade_parameters(self, price, atr, capital_slot, signal):
         """
-        LONG-ONLY: this function assumes a long position. If short-side trading is ever added
-        to strategy.py, this function needs new SL-above-entry / TP-below-entry math — do not
-        just flip a flag without rewriting the price logic.
-        
         Calculates Limit Entry, absolute SL distance, absolute TP distance, and downsizes shares.
         Ensures strict max ₹50 risk.
         Returns a dictionary or None if rejected.
@@ -33,9 +29,16 @@ class RiskManager:
         if self.check_kill_switch():
             return None
 
-        # 1. Calculate Prices
-        # Entry with 0.1% buffer
-        raw_limit_price = price * (1 + BUFFER_PERCENT)
+        # 1. Calculate Prices based on signal
+        if signal == "BUY":
+            raw_limit_price = price * (1 + BUFFER_PERCENT)
+            side = 1
+        elif signal == "SELL":
+            raw_limit_price = price * (1 - BUFFER_PERCENT)
+            side = -1
+        else:
+            return None
+            
         limit_entry = round(raw_limit_price, 1)
         
         # Absolute SL and TP distances
@@ -69,5 +72,6 @@ class RiskManager:
             "limit_entry": limit_entry,
             "stop_loss_abs": abs_sl,
             "take_profit_abs": abs_tp,
-            "qty": final_shares
+            "qty": final_shares,
+            "side": side
         }

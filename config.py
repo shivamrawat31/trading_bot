@@ -27,15 +27,19 @@ WATCHLIST = [
     "NSE:HDFCBANK-EQ",
     "NSE:ICICIBANK-EQ",
     "NSE:INFY-EQ",
-    "NSE:TCS-EQ",
+    "NSE:HINDALCO-EQ",
     "NSE:SBIN-EQ",
     "NSE:BHARTIARTL-EQ",
-    "NSE:ITC-EQ",
+    "NSE:ADANIPORTS-EQ",
     "NSE:LT-EQ",
     "NSE:KOTAKBANK-EQ"
 ]
 
 # Trading Constants
+HTF_TIMEFRAME = "15"
+LTF_TIMEFRAME = "5"
+RSI_BULLISH_THRESHOLD = 55
+RSI_BEARISH_THRESHOLD = 45
 MAX_RISK_PER_TRADE = 50.0  # ₹50 max risk rule
 DAILY_MAX_DRAWDOWN = -125.0 # -₹125 kill switch
 LEVERAGE = 5.0             # 5x MIS Leverage
