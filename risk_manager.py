@@ -1,7 +1,7 @@
 import math
 import logging
 from config import MAX_RISK_PER_TRADE, LEVERAGE, BUFFER_PERCENT, DAILY_MAX_DRAWDOWN, SL_ATR_MULTIPLIER, TP_ATR_MULTIPLIER
-from utils import round_to_tick
+# We do not use utils.round_to_tick anymore directly here
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +29,14 @@ class RiskManager:
         # 1. Calculate Prices (Assuming Long for now as per strategy "Long signals only")
         # Entry with 0.1% buffer
         raw_limit_price = price * (1 + BUFFER_PERCENT)
-        limit_entry = round_to_tick(raw_limit_price)
+        limit_entry = round(round(raw_limit_price / 0.05) * 0.05, 2)
         
         # Absolute SL and TP distances
         raw_sl_distance = atr * SL_ATR_MULTIPLIER
         raw_tp_distance = atr * TP_ATR_MULTIPLIER
         
-        abs_sl = round_to_tick(raw_sl_distance)
-        abs_tp = round_to_tick(raw_tp_distance)
+        abs_sl = round(round(raw_sl_distance / 0.05) * 0.05, 2)
+        abs_tp = round(round(raw_tp_distance / 0.05) * 0.05, 2)
         
         # Risk per share is exactly the SL distance
         risk_per_share = abs_sl
