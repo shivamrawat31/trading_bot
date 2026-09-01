@@ -2,8 +2,10 @@ import time
 import logging
 import datetime
 import json
+import numpy as np
+import pandas as pd
 from zoneinfo import ZoneInfo
-from config import WATCHLIST, MORNING_START, MARKET_CLOSE, STALE_ORDER_MINUTES, ZOMBIE_TRADE_MINUTES, NSE_HOLIDAYS, INITIAL_SLOTS, LEVERAGE, HTF_TIMEFRAME, LTF_TIMEFRAME
+from config import WATCHLIST, MORNING_START, MARKET_CLOSE, GOLDEN_WINDOW_END, STALE_ORDER_MINUTES, ZOMBIE_TRADE_MINUTES, NSE_HOLIDAYS, INITIAL_SLOTS, LEVERAGE, HTF_TIMEFRAME, LTF_TIMEFRAME, MAX_DAILY_TRADES, TRAIL_ACTIVATION_ATR, TRAIL_DISTANCE_ATR, INDEX_SYMBOL, USE_INDEX_FILTER
 from fyers_client import FyersClient
 from strategy import Strategy
 from risk_manager import RiskManager
@@ -52,11 +54,9 @@ class TradingBot:
                         
                 if available_balance > 2000:
                     dynamic_slots = [
-                        int(available_balance * 0.40),
-                        int(available_balance * 0.40),
-                        int(available_balance * 0.20)
+                        int(available_balance * 0.50),
+                        int(available_balance * 0.50)
                     ]
-                    import json
                     self.state_manager.redis_client.set("available_slots", json.dumps(dynamic_slots))
                     self.state_manager.redis_client.set("daily_initial_slots", json.dumps(dynamic_slots))
                     logger.info(f"Dynamically allocated slots based on balance {available_balance}: {dynamic_slots}")
@@ -223,12 +223,10 @@ class TradingBot:
         local_positions = self.state_manager.get_open_positions()
         local_orders = self.state_manager.get_pending_orders()
         
-        import json
         daily_initial_slots_json = self.state_manager.redis_client.get("daily_initial_slots")
         if daily_initial_slots_json:
             daily_initial_slots = json.loads(daily_initial_slots_json)
         else:
-            from config import INITIAL_SLOTS
             daily_initial_slots = INITIAL_SLOTS.copy()
 
         def estimate_slot(qty, entry_price):
@@ -244,18 +242,37 @@ class TradingBot:
         
         for symbol, live_pos in live_positions.items():
             if symbol not in local_pos_symbols:
-                qty = abs(live_pos.get("netQty", 0))
+                net_qty = live_pos.get("netQty", 0)
+                qty = abs(net_qty)
                 entry_price = live_pos.get("buyAvg") or live_pos.get("sellAvg") or 0
                 logger.critical(f"ORPHANED POSITION DETECTED: {symbol}, qty={qty} — not tracked in local state after restart")
                 
                 estimated = estimate_slot(qty, entry_price)
+                
+                side = 1 if net_qty > 0 else -1
+                
+                atr = 0.0
+                try:
+                    df_ltf = self.broker.get_history(symbol, resolution=LTF_TIMEFRAME)
+                    if df_ltf is not None and len(df_ltf) >= 20:
+                        high_low = df_ltf['high'] - df_ltf['low']
+                        high_close = np.abs(df_ltf['high'] - df_ltf['close'].shift())
+                        low_close = np.abs(df_ltf['low'] - df_ltf['close'].shift())
+                        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+                        true_range = np.max(ranges, axis=1)
+                        atr = float(true_range.ewm(alpha=1/14, min_periods=14, adjust=False).mean().iloc[-1])
+                except Exception as e:
+                    logger.error(f"Could not calculate ATR for {symbol} during reconciliation: {e}")
                 
                 # Add back to Redis with current time (zombie timer restarts)
                 self.state_manager.save_open_position({
                     "symbol": symbol,
                     "timestamp": datetime.datetime.now(KOLKATA_TZ).isoformat(),
                     "slot_used": estimated,
-                    "entry": entry_price
+                    "entry": entry_price,
+                    "side": side,
+                    "atr": atr,
+                    "high_water_mark": entry_price
                 })
                 local_positions.append({
                     "symbol": symbol,
@@ -277,16 +294,32 @@ class TradingBot:
                 symbol = live_order.get("symbol")
                 qty = live_order.get("qty", 0)
                 limit_price = live_order.get("limitPrice", 0)
+                side = live_order.get("side", 1)
                 logger.critical(f"ORPHANED PENDING ORDER DETECTED: {order_id} for {symbol}, qty={qty} — not tracked in local state after restart")
                 
                 estimated = estimate_slot(qty, limit_price)
+                
+                atr = 0.0
+                try:
+                    df_ltf = self.broker.get_history(symbol, resolution=LTF_TIMEFRAME)
+                    if df_ltf is not None and len(df_ltf) >= 20:
+                        high_low = df_ltf['high'] - df_ltf['low']
+                        high_close = np.abs(df_ltf['high'] - df_ltf['close'].shift())
+                        low_close = np.abs(df_ltf['low'] - df_ltf['close'].shift())
+                        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+                        true_range = np.max(ranges, axis=1)
+                        atr = float(true_range.ewm(alpha=1/14, min_periods=14, adjust=False).mean().iloc[-1])
+                except Exception as e:
+                    logger.error(f"Could not calculate ATR for {symbol} during reconciliation: {e}")
                 
                 self.state_manager.save_pending_order({
                     "order_id": order_id,
                     "symbol": symbol,
                     "timestamp": datetime.datetime.now(KOLKATA_TZ).isoformat(),
                     "slot_used": estimated,
-                    "limit_entry": limit_price
+                    "limit_entry": limit_price,
+                    "side": side,
+                    "atr": atr
                 })
                 local_orders.append({
                     "order_id": order_id,
@@ -349,7 +382,10 @@ class TradingBot:
                                 "symbol": p_order["symbol"],
                                 "timestamp": datetime.datetime.now(KOLKATA_TZ).isoformat(),
                                 "slot_used": p_order["slot_used"],
-                                "entry": p_order["limit_entry"]
+                                "entry": p_order["limit_entry"],
+                                "side": p_order.get("side"),
+                                "atr": p_order.get("atr"),
+                                "high_water_mark": p_order["limit_entry"]
                             })
                         else: # Cancelled/Rejected
                             self.state_manager.free_slot(p_order["slot_used"])
@@ -369,6 +405,50 @@ class TradingBot:
                 
                 if live_pos and live_pos.get("netQty") != 0:
                     # Position is still open
+                    
+                    # 1. Ratchet Trail Logic
+                    ltp = live_pos.get("ltp") or live_pos.get("recentPrice")
+                    if ltp:
+                        side = o_pos.get("side", 1)
+                        hwm = o_pos.get("high_water_mark", o_pos["entry"])
+                        entry = o_pos["entry"]
+                        atr = o_pos.get("atr", 0.0)
+                        
+                        updated_hwm = False
+                        
+                        if side == 1 and ltp > hwm:
+                            hwm = ltp
+                            updated_hwm = True
+                        elif side == -1 and ltp < hwm:
+                            hwm = ltp
+                            updated_hwm = True
+                            
+                        if updated_hwm:
+                            o_pos["high_water_mark"] = hwm
+                            self.state_manager.remove_open_position(symbol)
+                            self.state_manager.save_open_position(o_pos)
+                            
+                        abs_profit = abs(hwm - entry)
+                        
+                        if atr > 0 and abs_profit >= TRAIL_ACTIVATION_ATR * atr:
+                            trigger_exit = False
+                            if side == 1:
+                                dynamic_stop = hwm - (TRAIL_DISTANCE_ATR * atr)
+                                if ltp <= dynamic_stop:
+                                    trigger_exit = True
+                            elif side == -1:
+                                dynamic_stop = hwm + (TRAIL_DISTANCE_ATR * atr)
+                                if ltp >= dynamic_stop:
+                                    trigger_exit = True
+                                    
+                            if trigger_exit:
+                                logger.info(f"Trailing Stop Triggered for {symbol}. Exiting position.")
+                                alerts.send_alert(f"Trailing Stop Triggered for {symbol}. Exiting position.", "info")
+                                if self.broker.exit_position(live_pos.get("id")):
+                                    logger.info(f"Trailing Stop exit order sent for {symbol}. Will sync next tick.")
+                                continue # Skip zombie check if we exited
+                                
+                    # 2. Zombie Exterminator
                     pos_time = datetime.datetime.fromisoformat(o_pos["timestamp"])
                     if (datetime.datetime.now(KOLKATA_TZ) - pos_time).total_seconds() > ZOMBIE_TRADE_MINUTES * 60:
                         logger.info(f"Zombie Trade Exterminator: Exiting {symbol} (open > 90 mins)")
@@ -392,6 +472,15 @@ class TradingBot:
         if self.risk_manager.check_kill_switch():
             return
             
+        if self.state_manager.get_daily_trade_count() >= MAX_DAILY_TRADES:
+            logger.info("Max daily trades reached. Skipping execution.")
+            return
+
+        current_time_str = datetime.datetime.now(KOLKATA_TZ).strftime("%H:%M")
+        if current_time_str >= GOLDEN_WINDOW_END:
+            logger.info("Golden window has ended. Skipping execution for new setups.")
+            return
+            
         slots = self.state_manager.get_available_slots()
         if not slots:
             logger.info("No capital slots available. Skipping execution.")
@@ -403,6 +492,15 @@ class TradingBot:
         skipped_symbols = []
         
         open_symbols = [p["symbol"] for p in self.state_manager.get_open_positions()]
+        
+        index_bias = "NEUTRAL"
+        if USE_INDEX_FILTER:
+            try:
+                df_index = self.broker.get_history(INDEX_SYMBOL, resolution=LTF_TIMEFRAME)
+                index_bias = self.strategy.evaluate_index_bias(df_index)
+                logger.info(f"Broad Market Bias ({INDEX_SYMBOL}): {index_bias}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch index bias, defaulting to NEUTRAL: {e}")
         
         for symbol in WATCHLIST:
             if self.state_manager.is_symbol_locked(symbol):
@@ -425,6 +523,14 @@ class TradingBot:
                 result = self.strategy.calculate_signal(df_ltf, htf_trend)
                 evaluated_count += 1
                 if result and result["signal"] in ["BUY", "SELL"] and result["score"] >= 2:
+                    if USE_INDEX_FILTER and index_bias != "NEUTRAL":
+                        if result["signal"] == "BUY" and index_bias == "BEARISH":
+                            logger.info(f"Skipping BUY on {symbol} due to Bearish Nifty bias.")
+                            continue
+                        if result["signal"] == "SELL" and index_bias == "BULLISH":
+                            logger.info(f"Skipping SELL on {symbol} due to Bullish Nifty bias.")
+                            continue
+
                     result["symbol"] = symbol
                     triggered_stocks.append(result)
             except Exception as e:
@@ -452,14 +558,7 @@ class TradingBot:
             if not slots:
                 break # Out of money
                 
-            score = stock["score"]
-            slot_to_use = None
-            
-            # Score-based smart slot allocation rule
-            if score == 3:
-                slot_to_use = slots[0]
-            elif score == 2:
-                slot_to_use = slots[-1]
+            slot_to_use = slots[0]
             
             if not slot_to_use:
                 continue
@@ -468,7 +567,9 @@ class TradingBot:
                 price=stock["price"],
                 atr=stock["atr"],
                 capital_slot=slot_to_use,
-                signal=stock["signal"]
+                signal=stock["signal"],
+                sl_price=stock["sl_price"],
+                target_price=stock["target_price"]
             )
             
             if trade_params:
@@ -484,12 +585,15 @@ class TradingBot:
                 if order_id:
                     slots.remove(slot_to_use)
                     self.state_manager.allocate_slot(slot_to_use)
+                    self.state_manager.increment_daily_trade_count()
                     self.state_manager.save_pending_order({
                         "order_id": order_id,
                         "symbol": stock["symbol"],
                         "timestamp": datetime.datetime.now(KOLKATA_TZ).isoformat(),
                         "slot_used": slot_to_use,
-                        "limit_entry": trade_params["limit_entry"]
+                        "limit_entry": trade_params["limit_entry"],
+                        "side": trade_params["side"],
+                        "atr": stock["atr"]
                     })
                     logger.info(f"Order {order_id} placed for {stock['symbol']} using slot {slot_to_use}")
 

@@ -42,6 +42,7 @@ class StateManager:
         self.redis_client.set("pending_orders", json.dumps([]))
         self.redis_client.set("open_positions", json.dumps([]))
         self.redis_client.set("kill_switch_alerted", "false")
+        self.redis_client.set("daily_trade_count", 0)
         self.mark_reset_done()
         logger.info("Daily state initialized/reset: available slots, daily pnl, pending orders, and open positions reset.")
 
@@ -130,3 +131,11 @@ class StateManager:
     def mark_kill_switch_alerted(self):
         """Marks that the kill switch alert has been sent."""
         self.redis_client.set("kill_switch_alerted", "true")
+
+    def get_daily_trade_count(self):
+        """Gets the daily trade count."""
+        return int(self.redis_client.get("daily_trade_count") or 0)
+
+    def increment_daily_trade_count(self):
+        """Increments the daily trade count by 1."""
+        self.redis_client.incr("daily_trade_count")

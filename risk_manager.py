@@ -1,6 +1,6 @@
 import math
 import logging
-from config import MAX_RISK_PER_TRADE, LEVERAGE, BUFFER_PERCENT, DAILY_MAX_DRAWDOWN, SL_ATR_MULTIPLIER, TP_ATR_MULTIPLIER
+from config import MAX_RISK_PER_TRADE, LEVERAGE, BUFFER_PERCENT, DAILY_MAX_DRAWDOWN, MIN_RR_RATIO, DAILY_TARGET_PROFIT
 import alerts
 
 logger = logging.getLogger(__name__)
@@ -12,6 +12,12 @@ class RiskManager:
     def check_kill_switch(self):
         """Checks if the daily max drawdown has been breached."""
         daily_pnl = self.state_manager.get_daily_pnl()
+        
+        if daily_pnl >= DAILY_TARGET_PROFIT:
+            logger.info(f"DAILY TARGET REACHED! Daily PnL: {daily_pnl} >= {DAILY_TARGET_PROFIT}")
+            alerts.send_alert(f"DAILY TARGET REACHED! Daily PnL: {daily_pnl} >= {DAILY_TARGET_PROFIT}", "info")
+            return True
+            
         if daily_pnl <= DAILY_MAX_DRAWDOWN:
             logger.warning(f"KILL SWITCH ENGAGED! Daily PnL: {daily_pnl} <= {DAILY_MAX_DRAWDOWN}")
             if not self.state_manager.has_alerted_kill_switch():
@@ -20,10 +26,10 @@ class RiskManager:
             return True
         return False
 
-    def calculate_trade_parameters(self, price, atr, capital_slot, signal):
+    def calculate_trade_parameters(self, price, atr, capital_slot, signal, sl_price, target_price):
         """
         Calculates Limit Entry, absolute SL distance, absolute TP distance, and downsizes shares.
-        Ensures strict max ₹50 risk.
+        Ensures strict max MAX_RISK_PER_TRADE risk.
         Returns a dictionary or None if rejected.
         """
         if self.check_kill_switch():
@@ -41,19 +47,19 @@ class RiskManager:
             
         limit_entry = round(raw_limit_price, 1)
         
-        # Absolute SL and TP distances
-        raw_sl_distance = atr * SL_ATR_MULTIPLIER
-        raw_tp_distance = atr * TP_ATR_MULTIPLIER
+        abs_sl = round(abs(limit_entry - sl_price), 1)
+        abs_tp = round(abs(target_price - limit_entry), 1)
         
-        abs_sl = round(raw_sl_distance, 1)
-        abs_tp = round(raw_tp_distance, 1)
-        
-        # Risk per share is exactly the SL distance
-        risk_per_share = abs_sl
-        
-        if risk_per_share <= 0:
-            logger.error(f"Invalid risk per share calculated: {risk_per_share}")
+        if abs_sl <= 0 or abs_tp <= 0:
+            logger.error(f"Invalid structural levels: abs_sl={abs_sl}, abs_tp={abs_tp}")
             return None
+            
+        rr_ratio = abs_tp / abs_sl
+        if rr_ratio < MIN_RR_RATIO:
+            logger.info(f"Trade rejected: Poor R:R ratio {rr_ratio:.2f} < {MIN_RR_RATIO}")
+            return None
+            
+        risk_per_share = abs_sl
 
         # 2. Downsize Logic
         max_shares_by_risk = math.floor(MAX_RISK_PER_TRADE / risk_per_share)
