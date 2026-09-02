@@ -1,11 +1,12 @@
 import time
+import sys
 import logging
 import datetime
 import json
 import numpy as np
 import pandas as pd
 from zoneinfo import ZoneInfo
-from config import WATCHLIST, MORNING_START, MARKET_CLOSE, GOLDEN_WINDOW_END, STALE_ORDER_MINUTES, ZOMBIE_TRADE_MINUTES, NSE_HOLIDAYS, INITIAL_SLOTS, LEVERAGE, HTF_TIMEFRAME, LTF_TIMEFRAME, MAX_DAILY_TRADES, TRAIL_ACTIVATION_ATR, TRAIL_DISTANCE_ATR, INDEX_SYMBOL, USE_INDEX_FILTER
+from config import WATCHLIST, MORNING_START, SQUARE_OFF_TIME, MARKET_CLOSE, GOLDEN_WINDOW_END, STALE_ORDER_MINUTES, NSE_HOLIDAYS, INITIAL_SLOTS, LEVERAGE, HTF_TIMEFRAME, LTF_TIMEFRAME, MAX_DAILY_TRADES, TRAIL_ACTIVATION_ATR, TRAIL_DISTANCE_ATR, INDEX_SYMBOL, USE_INDEX_FILTER
 from fyers_client import FyersClient
 from strategy import Strategy
 from risk_manager import RiskManager
@@ -37,7 +38,6 @@ class TradingBot:
                     time.sleep(retry_delay * attempt)
                 else:
                     alerts.send_alert(f"Critical: All {max_retries} auth attempts failed. Bot halting.", "critical")
-                    import sys
                     sys.exit(1)
 
     def _apply_dynamic_slot_allocation(self):
@@ -130,7 +130,6 @@ class TradingBot:
                     except Exception as e:
                         logger.critical(f"Startup state reset/reconciliation FAILED: {e}")
                         alerts.send_alert(f"Startup state reset/reconciliation FAILED: {e}. Bot cannot safely determine capital/position state and is halting rather than risking trading with unknown state.", "critical")
-                        import sys
                         sys.exit(1)
                 self._safe_authenticate()
                 if reset_occurred:
@@ -156,7 +155,6 @@ class TradingBot:
                     except Exception as e:
                         logger.critical(f"Startup state reset/reconciliation FAILED: {e}")
                         alerts.send_alert(f"Startup state reset/reconciliation FAILED: {e}. Bot cannot safely determine capital/position state and is halting rather than risking trading with unknown state.", "critical")
-                        import sys
                         sys.exit(1)
                 self._safe_authenticate()
                 if reset_occurred:
@@ -184,7 +182,6 @@ class TradingBot:
                     except Exception as e:
                         logger.critical(f"Startup state reset/reconciliation FAILED: {e}")
                         alerts.send_alert(f"Startup state reset/reconciliation FAILED: {e}. Bot cannot safely determine capital/position state and is halting rather than risking trading with unknown state.", "critical")
-                        import sys
                         sys.exit(1)
                 self._safe_authenticate() # Re-auth for the new day
                 if reset_occurred:
@@ -353,6 +350,7 @@ class TradingBot:
     def _sync_state_and_exterminators(self):
         """Polls orderbook and positions to sync state, free slots, set lockouts, and run exterminators."""
         logger.info("Syncing state and running Exterminators...")
+        current_time_str = datetime.datetime.now(KOLKATA_TZ).strftime("%H:%M")
         
         # 1. Stale Order Exterminator & Order Sync
         pending_orders = self.state_manager.get_pending_orders()
@@ -369,7 +367,7 @@ class TradingBot:
                     status = live_order.get("status")
                     if status == 6:  # Pending
                         order_time = datetime.datetime.fromisoformat(p_order["timestamp"])
-                        if (datetime.datetime.now(KOLKATA_TZ) - order_time).total_seconds() > STALE_ORDER_MINUTES * 60:
+                        if current_time_str >= SQUARE_OFF_TIME or (datetime.datetime.now(KOLKATA_TZ) - order_time).total_seconds() > STALE_ORDER_MINUTES * 60:
                             logger.info(f"Stale Order Exterminator: Canceling {order_id}")
                             if self.broker.cancel_order(order_id):
                                 self.state_manager.free_slot(p_order["slot_used"])
@@ -391,7 +389,7 @@ class TradingBot:
                             self.state_manager.free_slot(p_order["slot_used"])
                         self.state_manager.remove_pending_order(order_id)
 
-        # 2. Zombie Trade Exterminator & Position Sync (SL/TP Hit)
+        # 2. Position Sync (SL/TP Hit & Trailing Stop)
         open_positions = self.state_manager.get_open_positions()
         live_positions_resp = self.broker.get_positions()
         
@@ -406,6 +404,14 @@ class TradingBot:
                 if live_pos and live_pos.get("netQty") != 0:
                     # Position is still open
                     
+                    # 0. Auto Square-Off Exterminator
+                    if current_time_str >= SQUARE_OFF_TIME:
+                        logger.info(f"Auto Square-Off: Force-exiting {symbol} at {current_time_str}")
+                        alerts.send_alert(f"Auto Square-Off: Force-exiting {symbol} at {current_time_str} to avoid broker penalties.", "warning")
+                        if self.broker.exit_position(live_pos.get("id")):
+                            logger.info(f"Square-off exit order sent for {symbol}.")
+                        continue
+
                     # 1. Ratchet Trail Logic
                     ltp = live_pos.get("ltp") or live_pos.get("recentPrice")
                     if ltp:
@@ -446,15 +452,8 @@ class TradingBot:
                                 alerts.send_alert(f"Trailing Stop Triggered for {symbol}. Exiting position.", "info")
                                 if self.broker.exit_position(live_pos.get("id")):
                                     logger.info(f"Trailing Stop exit order sent for {symbol}. Will sync next tick.")
-                                continue # Skip zombie check if we exited
+                                continue
                                 
-                    # 2. Zombie Exterminator
-                    pos_time = datetime.datetime.fromisoformat(o_pos["timestamp"])
-                    if (datetime.datetime.now(KOLKATA_TZ) - pos_time).total_seconds() > ZOMBIE_TRADE_MINUTES * 60:
-                        logger.info(f"Zombie Trade Exterminator: Exiting {symbol} (open > 90 mins)")
-                        alerts.send_alert(f"Zombie Trade Exterminator: Force-exiting {symbol} (open > 90 mins)", "warning")
-                        if self.broker.exit_position(live_pos.get("id")):
-                            logger.info(f"Exit order sent for {symbol}. PnL and state will sync on the next engine tick.")
                 else:
                     # Position is closed (SL or TP hit)
                     logger.info(f"Position for {symbol} closed automatically (SL/TP). Syncing state...")

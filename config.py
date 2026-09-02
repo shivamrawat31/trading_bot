@@ -56,27 +56,27 @@ MIN_SWEEP_DEPTH_ATR = 0.15
 
 # Timing
 MORNING_START = "09:45"
+SQUARE_OFF_TIME = "15:00"
 MARKET_CLOSE = "15:30"
 GOLDEN_WINDOW_END = "11:30"
 STALE_ORDER_MINUTES = 10   # 10 minutes (2 candles) pending order cancellation
-ZOMBIE_TRADE_MINUTES = 90  # 90 minutes (18 candles) without reaching 1x ATR
 
-# Indian Stock Market Holidays (YYYY-MM-DD format)
+# Indian Stock Market Holidays 2026 (YYYY-MM-DD format)
 NSE_HOLIDAYS = [
-    '2026-01-15', # Municipal Corporation Election (Maharashtra)
     '2026-01-26', # Republic Day
-    '2026-03-03', # Holi
-    '2026-03-26', # Shri Ram Navami
+    '2026-03-04', # Holi
+    '2026-03-20', # Eid-Ul-Fitr (Ramadan Eid)
+    '2026-03-27', # Shri Ram Navami
     '2026-03-31', # Shri Mahavir Jayanti
     '2026-04-03', # Good Friday
     '2026-04-14', # Dr. Baba Saheb Ambedkar Jayanti
     '2026-05-01', # Maharashtra Day
-    '2026-05-28', # Bakri Id
+    '2026-05-26', # Bakri Id (Eid-Ul-Zuha)
     '2026-06-26', # Muharram
     '2026-09-14', # Ganesh Chaturthi
     '2026-10-02', # Mahatma Gandhi Jayanti
     '2026-10-20', # Dussehra
-    '2026-11-10', # Diwali-Balipratipada
+    '2026-11-09', # Diwali-Balipratipada
     '2026-11-24', # Prakash Gurpurb Sri Guru Nanak Dev
     '2026-12-25'  # Christmas
 ]
