@@ -5,7 +5,7 @@ from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from fyers_client import FyersClient
 from strategy import Strategy
-from config import WATCHLIST, INDEX_SYMBOL, USE_INDEX_FILTER, LTF_TIMEFRAME, HTF_TIMEFRAME
+from config import WATCHLIST, INDEX_SYMBOL, USE_INDEX_FILTER, LTF_TIMEFRAME, HTF_TIMEFRAME, MAX_DAILY_TRADES
 
 # Suppress debug/info logs for cleaner output
 logging.basicConfig(level=logging.ERROR)
@@ -112,6 +112,8 @@ def main():
         stocks_traded_today = set()
         
         for check_time in times_to_check:
+            if trades_today >= MAX_DAILY_TRADES:
+                break
             time_str = check_time.strftime('%H:%M')
             if strat_choice == '1':
                 active_tier = 1
