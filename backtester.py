@@ -16,6 +16,7 @@ def main():
     # 1. Interactive Inputs
     start_input = input("Enter Start Date (YYYY-MM-DD): ").strip()
     end_input = input("Enter End Date (YYYY-MM-DD): ").strip()
+    strat_choice = input("Which strategy to backtest? (1, 2, or both): ").strip().lower()
     
     try:
         start_date = datetime.strptime(start_input, "%Y-%m-%d").date()
@@ -89,7 +90,13 @@ def main():
         print(f"\n📅 Date: {current_date}")
         
         try:
-            times_to_check = pd.date_range(start=f"{current_date} 09:45:00", end=f"{current_date} 11:30:00", freq="5min", tz="Asia/Kolkata")
+            if strat_choice == '1':
+                t_start, t_end = "09:45:00", "10:45:00"
+            elif strat_choice == '2':
+                t_start, t_end = "10:45:00", "15:10:00"
+            else:
+                t_start, t_end = "09:45:00", "15:10:00"
+            times_to_check = pd.date_range(start=f"{current_date} {t_start}", end=f"{current_date} {t_end}", freq="5min", tz="Asia/Kolkata")
         except Exception:
             continue
             
@@ -97,6 +104,14 @@ def main():
         stocks_traded_today = set()
         
         for check_time in times_to_check:
+            time_str = check_time.strftime('%H:%M')
+            if strat_choice == '1':
+                active_tier = 1
+            elif strat_choice == '2':
+                active_tier = 2
+            else:
+                active_tier = 1 if time_str < "10:45" else 2
+                
             sliced_index = index_data[index_data['datetime'] <= check_time].copy()
             
             bias = "NEUTRAL"
@@ -119,8 +134,11 @@ def main():
                 if sliced_ltf.empty or sliced_htf.empty:
                     continue
                     
-                or_data = strategy.determine_htf_trend(sliced_htf)
-                signal_data = strategy.calculate_signal(sliced_ltf, or_data)
+                if active_tier == 1:
+                    or_data = strategy.determine_htf_trend(sliced_htf)
+                    signal_data = strategy.calculate_signal(sliced_ltf, or_data)
+                else:
+                    signal_data = strategy.calculate_strategy_2(sliced_ltf)
                 signal = signal_data.get("signal", "NONE")
                 
                 if signal in ["BUY", "SELL"] and signal_data.get("score", 0) >= 2:
@@ -131,9 +149,8 @@ def main():
                     entry_price = signal_data.get("price", 0)
                     sl_price = signal_data.get("sl_price", 0)
                     tp_price = signal_data.get("target_price", 0)
-                    time_str = check_time.strftime('%H:%M')
                     
-                    print(f"  -> [{time_str}] {symbol} | {signal} | Nifty: {bias}")
+                    print(f"  -> [{time_str}] {symbol} | {signal} (Tier {active_tier}) | Nifty: {bias}")
                     print(f"      Entry: ₹{entry_price:.2f} | SL: ₹{sl_price:.2f} | TP: ₹{tp_price:.2f}")
                     
                     trades_today += 1

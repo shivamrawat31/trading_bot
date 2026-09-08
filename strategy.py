@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import logging
-from config import WICK_BODY_RATIO, VWAP_MAGNET_BUFFER, STRUCTURAL_BUFFER_ATR, MIN_SWEEP_DEPTH_ATR
+from config import WICK_BODY_RATIO, STRUCTURAL_BUFFER_ATR
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class Strategy:
             return default_ret
 
     def calculate_signal(self, df_ltf: pd.DataFrame, or_data: dict) -> dict:
-        default_ret = {"signal": "NONE", "score": 0, "atr": 0, "rvol": 0, "price": 0, "sl_price": 0, "target_price": 0}
+        default_ret = {"signal": "NONE", "score": 0, "atr": 0, "rvol": 0, "price": 0, "sl_price": 0, "target_price": 0, "strategy_tier": 1}
         
         if not or_data or or_data.get("ORH") is None or or_data.get("ORL") is None:
             return default_ret
@@ -90,37 +90,101 @@ class Strategy:
             orl = or_data["ORL"]
             
             # Volume Confirmation
-            if rvol >= 1.5:
+            if rvol >= 1.2:
                 # Bullish Sweep (BUY)
-                required_low = orl - (MIN_SWEEP_DEPTH_ATR * atr)
+                required_low = orl
                 pierced_below_orl = prev_candle['low'] <= required_low or closed['low'] <= required_low
                 closed_above_orl = close > orl
-                vwap_rule_bullish = vwap > close * (1 + VWAP_MAGNET_BUFFER)
+                vwap_rule_bullish = close > vwap
                 wick_rule_bullish = lower_wick >= real_body * WICK_BODY_RATIO
                 
                 if pierced_below_orl and closed_above_orl and vwap_rule_bullish and wick_rule_bullish:
                     sweep_low = min(prev_candle['low'], closed['low'])
                     sl_price = sweep_low - (STRUCTURAL_BUFFER_ATR * atr)
                     target_price = orh - (STRUCTURAL_BUFFER_ATR * atr)
-                    return {"signal": "BUY", "score": 3, "atr": atr, "rvol": rvol, "price": latest_price, "sl_price": sl_price, "target_price": target_price}
+                    return {"signal": "BUY", "score": 3, "atr": atr, "rvol": rvol, "price": latest_price, "sl_price": sl_price, "target_price": target_price, "strategy_tier": 1}
                 
                 # Bearish Sweep (SELL)
-                required_high = orh + (MIN_SWEEP_DEPTH_ATR * atr)
+                required_high = orh
                 pierced_above_orh = prev_candle['high'] >= required_high or closed['high'] >= required_high
                 closed_below_orh = close < orh
-                vwap_rule_bearish = vwap < close * (1 - VWAP_MAGNET_BUFFER)
+                vwap_rule_bearish = close < vwap
                 wick_rule_bearish = upper_wick >= real_body * WICK_BODY_RATIO
                 
                 if pierced_above_orh and closed_below_orh and vwap_rule_bearish and wick_rule_bearish:
                     sweep_high = max(prev_candle['high'], closed['high'])
                     sl_price = sweep_high + (STRUCTURAL_BUFFER_ATR * atr)
                     target_price = orl + (STRUCTURAL_BUFFER_ATR * atr)
-                    return {"signal": "SELL", "score": 3, "atr": atr, "rvol": rvol, "price": latest_price, "sl_price": sl_price, "target_price": target_price}
+                    return {"signal": "SELL", "score": 3, "atr": atr, "rvol": rvol, "price": latest_price, "sl_price": sl_price, "target_price": target_price, "strategy_tier": 1}
                     
             return default_ret
             
         except Exception as e:
             logger.error(f"Error calculating LTF signal: {e}")
+            return default_ret
+
+    def calculate_strategy_2(self, df_ltf: pd.DataFrame) -> dict:
+        default_ret = {"signal": "NONE", "score": 0, "atr": 0, "rvol": 0, "price": 0, "sl_price": 0, "target_price": 0, "strategy_tier": 2}
+        
+        if df_ltf is None or len(df_ltf) < 20:
+            logger.warning("Not enough LTF data to calculate strategy 2.")
+            return default_ret
+            
+        try:
+            # ATR 14
+            high_low = df_ltf['high'] - df_ltf['low']
+            high_close = np.abs(df_ltf['high'] - df_ltf['close'].shift())
+            low_close = np.abs(df_ltf['low'] - df_ltf['close'].shift())
+            ranges = pd.concat([high_low, high_close, low_close], axis=1)
+            true_range = np.max(ranges, axis=1)
+            df_ltf['ATR_14'] = true_range.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+            
+            # Volume SMA 20
+            df_ltf['Vol_SMA_20'] = df_ltf['volume'].rolling(window=20).mean()
+            
+            # VWAP
+            df_ltf['date'] = df_ltf['datetime'].dt.date
+            df_ltf['tp'] = (df_ltf['high'] + df_ltf['low'] + df_ltf['close']) / 3
+            df_ltf['vol_price'] = df_ltf['tp'] * df_ltf['volume']
+            df_ltf['VWAP'] = df_ltf.groupby('date')['vol_price'].cumsum() / df_ltf.groupby('date')['volume'].cumsum()
+            
+            # EMA 9
+            df_ltf['EMA_9'] = df_ltf['close'].ewm(span=9, adjust=False).mean()
+            
+            closed = df_ltf.iloc[-2]
+            
+            vol = closed['volume']
+            vol_sma = closed['Vol_SMA_20']
+            atr = closed['ATR_14']
+            vwap = closed['VWAP']
+            close = closed['close']
+            open_price = closed['open']
+            low = closed['low']
+            high = closed['high']
+            ema_9 = closed['EMA_9']
+            
+            latest_price = df_ltf.iloc[-1]['close']
+            rvol = vol / vol_sma if vol_sma > 0 else 0
+            
+            if rvol >= 1.0:
+                # Bullish (BUY)
+                if close > vwap and close > ema_9 and low <= ema_9 and close > open_price:
+                    sl_price = low - (STRUCTURAL_BUFFER_ATR * atr)
+                    sl_dist = abs(latest_price - sl_price)
+                    target_price = latest_price + (1.5 * sl_dist)
+                    return {"signal": "BUY", "score": 2, "atr": atr, "rvol": rvol, "price": latest_price, "sl_price": sl_price, "target_price": target_price, "strategy_tier": 2}
+                    
+                # Bearish (SELL)
+                if close < vwap and close < ema_9 and high >= ema_9 and close < open_price:
+                    sl_price = high + (STRUCTURAL_BUFFER_ATR * atr)
+                    sl_dist = abs(sl_price - latest_price)
+                    target_price = latest_price - (1.5 * sl_dist)
+                    return {"signal": "SELL", "score": 2, "atr": atr, "rvol": rvol, "price": latest_price, "sl_price": sl_price, "target_price": target_price, "strategy_tier": 2}
+                    
+            return default_ret
+            
+        except Exception as e:
+            logger.error(f"Error calculating strategy 2 signal: {e}")
             return default_ret
 
     def evaluate_index_bias(self, df_index: pd.DataFrame) -> str:

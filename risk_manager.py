@@ -26,7 +26,7 @@ class RiskManager:
             return True
         return False
 
-    def calculate_trade_parameters(self, price, atr, capital_slot, signal, sl_price, target_price):
+    def calculate_trade_parameters(self, price, atr, capital_slot, signal, sl_price, target_price, strategy_tier=2):
         """
         Calculates Limit Entry, absolute SL distance, absolute TP distance, and downsizes shares.
         Ensures strict max MAX_RISK_PER_TRADE risk.
@@ -62,7 +62,8 @@ class RiskManager:
         risk_per_share = abs_sl
 
         # 2. Downsize Logic
-        max_shares_by_risk = math.floor(MAX_RISK_PER_TRADE / risk_per_share)
+        current_max_risk = MAX_RISK_PER_TRADE * 2 if strategy_tier == 1 else MAX_RISK_PER_TRADE
+        max_shares_by_risk = math.floor(current_max_risk / risk_per_share)
         
         max_exposure = capital_slot * LEVERAGE
         max_shares_by_margin = math.floor(max_exposure / limit_entry)

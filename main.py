@@ -265,7 +265,7 @@ class TradingBot:
                 self.state_manager.save_open_position({
                     "symbol": symbol,
                     "timestamp": datetime.datetime.now(KOLKATA_TZ).isoformat(),
-                    "slot_used": estimated,
+                    "slot_used": [estimated],
                     "entry": entry_price,
                     "side": side,
                     "atr": atr,
@@ -273,7 +273,7 @@ class TradingBot:
                 })
                 local_positions.append({
                     "symbol": symbol,
-                    "slot_used": estimated
+                    "slot_used": [estimated]
                 })
                 
         # Remove stale local positions
@@ -313,14 +313,14 @@ class TradingBot:
                     "order_id": order_id,
                     "symbol": symbol,
                     "timestamp": datetime.datetime.now(KOLKATA_TZ).isoformat(),
-                    "slot_used": estimated,
+                    "slot_used": [estimated],
                     "limit_entry": limit_price,
                     "side": side,
                     "atr": atr
                 })
                 local_orders.append({
                     "order_id": order_id,
-                    "slot_used": estimated
+                    "slot_used": [estimated]
                 })
                 
         # Remove stale local orders
@@ -331,7 +331,7 @@ class TradingBot:
                 local_orders.remove(o)
                 
         # 4. Recompute slots from scratch
-        all_active_slots_needed = [p.get("slot_used") for p in local_positions if p.get("slot_used")] + [o.get("slot_used") for o in local_orders if o.get("slot_used")]
+        all_active_slots_needed = [s for p in local_positions for s in p.get("slot_used", [])] + [s for o in local_orders for s in o.get("slot_used", [])]
         
         for needed_slot in all_active_slots_needed:
             if needed_slot in recomputed_slots:
@@ -370,7 +370,7 @@ class TradingBot:
                         if current_time_str >= SQUARE_OFF_TIME or (datetime.datetime.now(KOLKATA_TZ) - order_time).total_seconds() > STALE_ORDER_MINUTES * 60:
                             logger.info(f"Stale Order Exterminator: Canceling {order_id}")
                             if self.broker.cancel_order(order_id):
-                                self.state_manager.free_slot(p_order["slot_used"])
+                                for s in p_order.get("slot_used", []): self.state_manager.free_slot(s)
                                 self.state_manager.remove_pending_order(order_id)
                     elif status in [2, 3, 4, 5]: # Traded, Cancelled, Modified, Rejected
                         if status == 5:
@@ -386,7 +386,7 @@ class TradingBot:
                                 "high_water_mark": p_order["limit_entry"]
                             })
                         else: # Cancelled/Rejected
-                            self.state_manager.free_slot(p_order["slot_used"])
+                            for s in p_order.get("slot_used", []): self.state_manager.free_slot(s)
                         self.state_manager.remove_pending_order(order_id)
 
         # 2. Position Sync (SL/TP Hit & Trailing Stop)
@@ -457,7 +457,7 @@ class TradingBot:
                 else:
                     # Position is closed (SL or TP hit)
                     logger.info(f"Position for {symbol} closed automatically (SL/TP). Syncing state...")
-                    self.state_manager.free_slot(o_pos["slot_used"])
+                    for s in o_pos.get("slot_used", []): self.state_manager.free_slot(s)
                     self.state_manager.remove_open_position(symbol)
                     self.state_manager.lock_symbol(symbol)
                     
@@ -476,6 +476,7 @@ class TradingBot:
             return
 
         current_time_str = datetime.datetime.now(KOLKATA_TZ).strftime("%H:%M")
+        active_tier = 1 if current_time_str < "10:45" else 2
         if current_time_str >= GOLDEN_WINDOW_END:
             logger.info("Golden window has ended. Skipping execution for new setups.")
             return
@@ -518,8 +519,11 @@ class TradingBot:
                 continue
                 
             try:
-                htf_trend = self.strategy.determine_htf_trend(df_htf)
-                result = self.strategy.calculate_signal(df_ltf, htf_trend)
+                if active_tier == 1:
+                    htf_trend = self.strategy.determine_htf_trend(df_htf)
+                    result = self.strategy.calculate_signal(df_ltf, htf_trend)
+                else:
+                    result = self.strategy.calculate_strategy_2(df_ltf)
                 evaluated_count += 1
                 if result and result["signal"] in ["BUY", "SELL"] and result["score"] >= 2:
                     if USE_INDEX_FILTER and index_bias != "NEUTRAL":
@@ -557,18 +561,25 @@ class TradingBot:
             if not slots:
                 break # Out of money
                 
-            slot_to_use = slots[0]
+            tier = stock.get("strategy_tier", 2)
+            if tier == 1:
+                capital_to_use = sum(slots)
+                slots_to_consume = slots.copy()
+            else:
+                capital_to_use = slots[0]
+                slots_to_consume = [slots[0]]
             
-            if not slot_to_use:
+            if not capital_to_use:
                 continue
             
             trade_params = self.risk_manager.calculate_trade_parameters(
                 price=stock["price"],
                 atr=stock["atr"],
-                capital_slot=slot_to_use,
+                capital_slot=capital_to_use,
                 signal=stock["signal"],
                 sl_price=stock["sl_price"],
-                target_price=stock["target_price"]
+                target_price=stock["target_price"],
+                strategy_tier=tier
             )
             
             if trade_params:
@@ -582,19 +593,20 @@ class TradingBot:
                 )
                 
                 if order_id:
-                    slots.remove(slot_to_use)
-                    self.state_manager.allocate_slot(slot_to_use)
+                    for s in slots_to_consume:
+                        slots.remove(s)
+                        self.state_manager.allocate_slot(s)
                     self.state_manager.increment_daily_trade_count()
                     self.state_manager.save_pending_order({
                         "order_id": order_id,
                         "symbol": stock["symbol"],
                         "timestamp": datetime.datetime.now(KOLKATA_TZ).isoformat(),
-                        "slot_used": slot_to_use,
+                        "slot_used": slots_to_consume,
                         "limit_entry": trade_params["limit_entry"],
                         "side": trade_params["side"],
                         "atr": stock["atr"]
                     })
-                    logger.info(f"Order {order_id} placed for {stock['symbol']} using slot {slot_to_use}")
+                    logger.info(f"Order {order_id} placed for {stock['symbol']} using slots {slots_to_consume}")
 
 if __name__ == "__main__":
     bot = TradingBot()
