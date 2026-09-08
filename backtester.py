@@ -1,6 +1,7 @@
 import pandas as pd
 import logging
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
 from fyers_client import FyersClient
 from strategy import Strategy
 from config import WATCHLIST, INDEX_SYMBOL, USE_INDEX_FILTER, LTF_TIMEFRAME, HTF_TIMEFRAME
@@ -29,12 +30,17 @@ def main():
         print("❌ Start date cannot be after end date.")
         return
 
-    # Calculate how many days of history Fyers needs to fetch from today
-    today = datetime.now().date()
-    days_to_fetch = (today - start_date).days + 2 # Add a 2-day buffer
+    tz = ZoneInfo("Asia/Kolkata")
     
-    if days_to_fetch <= 0:
-        days_to_fetch = 5 # Default fallback
+    start_dt = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=tz)
+    end_dt = datetime.combine(end_date, datetime.max.time()).replace(tzinfo=tz)
+    
+    start_epoch = int(start_dt.timestamp())
+    end_epoch = int(end_dt.timestamp())
+    
+    if (end_date - start_date).days > 99:
+        print("❌ Fyers API error -50: You cannot request more than 99 days of intraday data at once.")
+        return
 
     print(f"\n📡 Authenticating with Fyers and fetching data...")
     try:
@@ -47,7 +53,7 @@ def main():
     strategy = Strategy()
     
     # 2. Fetch and Filter Data
-    index_data = broker.get_history(INDEX_SYMBOL, resolution=LTF_TIMEFRAME, days=days_to_fetch)
+    index_data = broker.get_history(INDEX_SYMBOL, resolution=LTF_TIMEFRAME, start_epoch=start_epoch, end_epoch=end_epoch)
     if index_data is None or index_data.empty:
         print("❌ Failed to fetch Index data.")
         return
@@ -60,12 +66,12 @@ def main():
     stock_data_htf = {}
     for symbol in WATCHLIST:
         # LTF
-        df_l = broker.get_history(symbol, resolution=LTF_TIMEFRAME, days=days_to_fetch)
+        df_l = broker.get_history(symbol, resolution=LTF_TIMEFRAME, start_epoch=start_epoch, end_epoch=end_epoch)
         if df_l is not None and not df_l.empty:
             df_l['date'] = df_l['datetime'].dt.date
             stock_data_ltf[symbol] = df_l[(df_l['date'] >= start_date) & (df_l['date'] <= end_date)]
         # HTF
-        df_h = broker.get_history(symbol, resolution=HTF_TIMEFRAME, days=days_to_fetch)
+        df_h = broker.get_history(symbol, resolution=HTF_TIMEFRAME, start_epoch=start_epoch, end_epoch=end_epoch)
         if df_h is not None and not df_h.empty:
             df_h['date'] = df_h['datetime'].dt.date
             stock_data_htf[symbol] = df_h[(df_h['date'] >= start_date) & (df_h['date'] <= end_date)]

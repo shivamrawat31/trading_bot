@@ -107,15 +107,18 @@ class FyersClient:
             alerts.send_alert(f"Fyers API authentication failed: {e}", "critical")
             raise
 
-    def get_history(self, symbol: str, resolution: str = "5", days: int = 5) -> pd.DataFrame:
+    def get_history(self, symbol: str, resolution: str = "5", days: int = 5, start_epoch: int = None, end_epoch: int = None) -> pd.DataFrame:
         """Fetches historical data and returns a DataFrame."""
         if not self.fyers:
             raise Exception("Not authenticated.")
             
         # Time calculations (epoch)
-        
-        end_time = int(time.time())
-        start_time = int((datetime.now() - timedelta(days=days)).timestamp())
+        if start_epoch is not None and end_epoch is not None:
+            start_time = start_epoch
+            end_time = end_epoch
+        else:
+            end_time = int(time.time())
+            start_time = int((datetime.now() - timedelta(days=days)).timestamp())
         
         data = {
             "symbol": symbol,
