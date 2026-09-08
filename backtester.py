@@ -1,3 +1,4 @@
+import time
 import pandas as pd
 import logging
 from datetime import datetime, date
@@ -65,6 +66,7 @@ def main():
     stock_data_ltf = {}
     stock_data_htf = {}
     for symbol in WATCHLIST:
+        time.sleep(0.6)
         # LTF
         df_l = broker.get_history(symbol, resolution=LTF_TIMEFRAME, start_epoch=start_epoch, end_epoch=end_epoch)
         if df_l is not None and not df_l.empty:

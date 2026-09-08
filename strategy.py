@@ -95,10 +95,9 @@ class Strategy:
                 required_low = orl
                 pierced_below_orl = prev_candle['low'] <= required_low or closed['low'] <= required_low
                 closed_above_orl = close > orl
-                vwap_rule_bullish = close > vwap
                 wick_rule_bullish = lower_wick >= real_body * WICK_BODY_RATIO
                 
-                if pierced_below_orl and closed_above_orl and vwap_rule_bullish and wick_rule_bullish:
+                if pierced_below_orl and closed_above_orl and wick_rule_bullish:
                     sweep_low = min(prev_candle['low'], closed['low'])
                     sl_price = sweep_low - (STRUCTURAL_BUFFER_ATR * atr)
                     target_price = orh - (STRUCTURAL_BUFFER_ATR * atr)
@@ -108,10 +107,9 @@ class Strategy:
                 required_high = orh
                 pierced_above_orh = prev_candle['high'] >= required_high or closed['high'] >= required_high
                 closed_below_orh = close < orh
-                vwap_rule_bearish = close < vwap
                 wick_rule_bearish = upper_wick >= real_body * WICK_BODY_RATIO
                 
-                if pierced_above_orh and closed_below_orh and vwap_rule_bearish and wick_rule_bearish:
+                if pierced_above_orh and closed_below_orh and wick_rule_bearish:
                     sweep_high = max(prev_candle['high'], closed['high'])
                     sl_price = sweep_high + (STRUCTURAL_BUFFER_ATR * atr)
                     target_price = orl + (STRUCTURAL_BUFFER_ATR * atr)
