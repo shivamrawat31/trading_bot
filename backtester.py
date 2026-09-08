@@ -166,6 +166,8 @@ def main():
                     trades_today += 1
                     total_trades += 1
                     stocks_traded_today.add(symbol)
+                    if trades_today >= MAX_DAILY_TRADES:
+                        break
                     
         if trades_today > 0:
             days_with_trades += 1
