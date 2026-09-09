@@ -277,10 +277,25 @@ class TradingBot:
                 })
                 
         # Remove stale local positions
+        all_positions = {}
+        if live_positions_resp and live_positions_resp.get("s") == "ok":
+            all_positions = {pos.get("symbol"): pos for pos in live_positions_resp.get("netPositions", []) if pos.get("symbol")}
+            
         for p in list(local_positions):
             if p.get("symbol") not in live_positions:
-                logger.warning(f"STALE LOCAL STATE: {p.get('symbol')} tracked locally but not found on broker — removing from local state")
-                self.state_manager.remove_open_position(p.get("symbol"))
+                symbol = p.get("symbol")
+                live_pos = all_positions.get(symbol)
+                if live_pos and "realized_profit" in live_pos:
+                    realized = live_pos.get("realized_profit", 0)
+                    self.state_manager.update_daily_pnl(realized)
+                    logger.info(f"Realized PnL of {realized} recorded for {symbol} during reconciliation.")
+                else:
+                    msg = f"PnL for {symbol} could not be reconciled and needs manual review."
+                    logger.critical(msg)
+                    alerts.send_alert(msg, "critical")
+                
+                logger.warning(f"STALE LOCAL STATE: {symbol} tracked locally but not found on broker — removing from local state")
+                self.state_manager.remove_open_position(symbol)
                 local_positions.remove(p)
                 
         # 3. Reconcile Orders
@@ -454,17 +469,20 @@ class TradingBot:
                                     logger.info(f"Trailing Stop exit order sent for {symbol}. Will sync next tick.")
                                 continue
                                 
-                else:
+                elif live_pos and live_pos.get("netQty") == 0:
                     # Position is closed (SL or TP hit)
                     logger.info(f"Position for {symbol} closed automatically (SL/TP). Syncing state...")
                     for s in o_pos.get("slot_used", []): self.state_manager.free_slot(s)
                     self.state_manager.remove_open_position(symbol)
                     self.state_manager.lock_symbol(symbol)
                     
-                    if live_pos:
-                        realized = live_pos.get("realized_profit", 0)
-                        self.state_manager.update_daily_pnl(realized)
-                        logger.info(f"Realized PnL of {realized} recorded for {symbol}.")
+                    realized = live_pos.get("realized_profit", 0)
+                    self.state_manager.update_daily_pnl(realized)
+                    logger.info(f"Realized PnL of {realized} recorded for {symbol}.")
+                else:
+                    msg = f"Position for {symbol} could not be verified against the broker and requires manual check."
+                    logger.critical(msg)
+                    alerts.send_alert(msg, "critical")
 
     def _execute_strategy(self):
         """Fetches data, evaluates signals, applies tie-breaker, and places orders."""
@@ -477,7 +495,7 @@ class TradingBot:
 
         current_time_str = datetime.datetime.now(KOLKATA_TZ).strftime("%H:%M")
         active_tier = 1 if current_time_str < "10:45" else 2
-        if current_time_str >= GOLDEN_WINDOW_END:
+        if current_time_str >= min(GOLDEN_WINDOW_END, SQUARE_OFF_TIME):
             logger.info("Golden window has ended. Skipping execution for new setups.")
             return
             

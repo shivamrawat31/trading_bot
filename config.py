@@ -57,7 +57,7 @@ USE_INDEX_FILTER = True
 MORNING_START = "09:45"
 SQUARE_OFF_TIME = "15:00"
 MARKET_CLOSE = "15:30"
-GOLDEN_WINDOW_END = "15:10"
+GOLDEN_WINDOW_END = "14:30"
 STALE_ORDER_MINUTES = 10   # 10 minutes (2 candles) pending order cancellation
 
 # Indian Stock Market Holidays 2026 (YYYY-MM-DD format)

@@ -82,9 +82,15 @@ class StateManager:
         return float(self.redis_client.get("daily_pnl") or 0.0)
 
     def lock_symbol(self, symbol):
-        """Locks a symbol for the rest of the day using 24h expiry."""
-        # 24 hours = 86400 seconds
-        self.redis_client.setex(f"locked_{symbol}", 86400, "locked")
+        """Locks a symbol until the next trading day's MORNING_START."""
+        from config import MORNING_START
+        now = datetime.datetime.now(ZoneInfo("Asia/Kolkata"))
+        h, m = map(int, MORNING_START.split(':'))
+        next_morning = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if now >= next_morning:
+            next_morning += datetime.timedelta(days=1)
+        ttl = int((next_morning - now).total_seconds())
+        self.redis_client.setex(f"locked_{symbol}", max(1, ttl), "locked")
 
     def is_symbol_locked(self, symbol):
         """Checks if a symbol is locked (one-and-done rule)."""

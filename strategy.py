@@ -146,35 +146,46 @@ class Strategy:
             df_ltf['vol_price'] = df_ltf['tp'] * df_ltf['volume']
             df_ltf['VWAP'] = df_ltf.groupby('date')['vol_price'].cumsum() / df_ltf.groupby('date')['volume'].cumsum()
             
-            # EMA 9
-            df_ltf['EMA_9'] = df_ltf['close'].ewm(span=9, adjust=False).mean()
+            # RSI 14
+            delta = df_ltf['close'].diff()
+            gain = delta.where(delta > 0, 0.0)
+            loss = -delta.where(delta < 0, 0.0)
+            avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+            avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+            rs = avg_gain / avg_loss.replace(0, np.nan)
+            df_ltf['RSI_14'] = 100 - (100 / (1 + rs))
+            df_ltf['RSI_14'] = df_ltf['RSI_14'].fillna(100) # Handle 0 division
+            
+            # Pullback Detection (Last 3 closed candles)
+            last_3 = df_ltf.iloc[-4:-1]
+            pullback = ((last_3['low'] <= last_3['VWAP']) & (last_3['high'] >= last_3['VWAP'])).any()
+            
+            structural_low = float(last_3['low'].min())
+            structural_high = float(last_3['high'].max())
             
             closed = df_ltf.iloc[-2]
             
-            vol = closed['volume']
-            vol_sma = closed['Vol_SMA_20']
-            atr = closed['ATR_14']
-            vwap = closed['VWAP']
-            close = closed['close']
-            open_price = closed['open']
-            low = closed['low']
-            high = closed['high']
-            ema_9 = closed['EMA_9']
+            vol = float(closed['volume'])
+            vol_sma = float(closed['Vol_SMA_20'])
+            atr = float(closed['ATR_14'])
+            vwap = float(closed['VWAP'])
+            close = float(closed['close'])
+            rsi = float(closed['RSI_14'])
             
-            latest_price = df_ltf.iloc[-1]['close']
+            latest_price = float(df_ltf.iloc[-1]['close'])
             rvol = vol / vol_sma if vol_sma > 0 else 0
             
-            if rvol >= 1.0:
-                # Bullish (BUY)
-                if close > vwap and close > ema_9 and low <= ema_9 and close > open_price:
-                    sl_price = low - (STRUCTURAL_BUFFER_ATR * atr)
+            if pullback and vol > vol_sma:
+                # Bullish Setup (BUY)
+                if close > vwap and 45 <= rsi <= 60:
+                    sl_price = structural_low - (STRUCTURAL_BUFFER_ATR * atr)
                     sl_dist = abs(latest_price - sl_price)
                     target_price = latest_price + (1.5 * sl_dist)
                     return {"signal": "BUY", "score": 2, "atr": atr, "rvol": rvol, "price": latest_price, "sl_price": sl_price, "target_price": target_price, "strategy_tier": 2}
                     
-                # Bearish (SELL)
-                if close < vwap and close < ema_9 and high >= ema_9 and close < open_price:
-                    sl_price = high + (STRUCTURAL_BUFFER_ATR * atr)
+                # Bearish Setup (SELL)
+                if close < vwap and 40 <= rsi <= 55:
+                    sl_price = structural_high + (STRUCTURAL_BUFFER_ATR * atr)
                     sl_dist = abs(sl_price - latest_price)
                     target_price = latest_price - (1.5 * sl_dist)
                     return {"signal": "SELL", "score": 2, "atr": atr, "rvol": rvol, "price": latest_price, "sl_price": sl_price, "target_price": target_price, "strategy_tier": 2}
